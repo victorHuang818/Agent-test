@@ -59,6 +59,17 @@ make PY=py self-check
 make PY=py dev
 ```
 
+### 环境变量与数据初始化
+
+本仓库使用 Python 标准库 `sqlite3`，不需要外部数据库服务。`.env.example` 只说明推荐变量名，应用不会自动加载 `.env`；如需覆盖路径，请在当前 shell、测试或启动脚本中显式设置环境变量。
+
+| 变量 | 默认值 | 约定 |
+| --- | --- | --- |
+| `ASSESSMENT_DB_PATH` | `.data/assessment.sqlite` | SQLite 数据库路径。运行 `py -m agentops_assessment.backend.seed` 会创建父目录和数据库文件，并写入用户与知识库 chunk。 |
+| `ASSESSMENT_FIXTURES_DIR` | `fixtures` | fixture 根目录。业务系统 JSON、用户数据和知识库文档都必须从该目录读取；正式评分可能切换到隐藏 fixture。 |
+
+候选实现不得写死 `fixtures`、公开 SKU、公开用户或公开知识库路径。所有集成客户端、seed、RAG 和测试辅助代码都应尊重上述环境变量或显式传入的 fixture/db 路径。
+
 ## 候选人任务
 
 请补全代码中的 `TODO(candidate/P0)`、`TODO(candidate/P1)`、`TODO(candidate/P2)`，并同步填写 `COLLABORATION_LOG.md` 中的协作证据。公开仓库只提供基础自检：
@@ -69,7 +80,7 @@ python scripts/self_check.py
 
 仓库还包含 `tests/test_acceptance_guidance.py`，用于暴露更接近正式评分的验收方向。该文件默认以 `xfail` 形式存在，起始仓库不会因为它变红；候选人完成实现后可以去掉或收紧这些标记，用它校准业务闭环、权限、RAG、脱敏和可见性。
 
-正式评分不会只测公开样例，也不会只测 `SKU-001`。请避免写死用户、SKU、工具输出或公开 fixture。
+正式评分不会只测公开样例，也不会只测 `SKU-001`。评审会替换 fixture、SKU、仓库、知识库、用户权限和异常路径。请避免写死用户、SKU、工具输出或公开 fixture。
 
 建议按优先级实现：
 
@@ -117,6 +128,132 @@ curl -X POST http://127.0.0.1:8000/api/tasks \
   -H "X-User-Id: alice" \
   -d '{"title":"SKU-001 库存异常分析","prompt":"分析 SKU-001 库存异常，并生成补货审批建议"}'
 ```
+
+### 公开字段契约
+
+以下字段名、事件名和审计动作是正式评分会依赖的公开契约。可以增加兼容字段，但不要删除、重命名或用语义相近的别名替代这些字段。
+
+#### 运行结果
+
+`GET /api/runs/{run_id}` 返回的 `result` 应是最终业务汇总，而不是某个工具的原始输出。补货审批类任务完成后至少包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `sku` | 从任务或上下文识别到的 SKU，必须支持隐藏 SKU。 |
+| `warehouse` | ERP 库存所在仓库，例如公开样例中的 `WH-SH-01`。 |
+| `stock_gap` | 当前可用库存与安全库存或预测需求之间的缺口。 |
+| `forecast_units_next_14d` | BI 给出的未来 14 天预测需求；如字段来自 BI 原始数据，应透传或汇总到结果。 |
+| `supplier_risk` | 供应商风险摘要，至少保留 `supplier_id` 和 `risk_level`。 |
+| `citations` | RAG 引用列表，元素包含 `doc_id`、`title`、`source_path`、`chunk_id`。 |
+| `recommended_action` | 标准值示例：需要创建补货审批时为 `create_replenishment_approval`。 |
+| `approval_draft_id` | 仅在任务确实需要 OA 草稿且用户具备 `oa:approval:write` 时出现。 |
+
+只分析任务或无审批写权限的任务不得产生 `approval_draft_id`，也不得在事件、审计日志或错误信息中泄露 `OA-DRAFT-` 草稿号。缺权限时可以在运行前返回 `403`，也可以让 run 进入可解释的 `failed` 或完成只读分析，但必须留下包含缺失权限的证据。
+
+#### Agent 计划与事件
+
+补货审批类任务的标准工具链为：
+
+```text
+erp.get_inventory -> bi.get_sales -> knowledge.search -> supplier.get_risk -> oa.create_approval_draft
+```
+
+Planner 应根据任务意图生成上述确定性工具计划，不得只返回占位 LLM 步骤。Executor 应按计划执行、持久化每步状态，并把最终业务结果保存到 run。
+
+`GET /api/runs/{run_id}/events` 返回供评审和管理后台消费的标准工具轨迹：
+
+| 字段 | 约定 |
+| --- | --- |
+| `seq` | 单调递增，按执行顺序排序。 |
+| `type` | 标准工具调用事件使用 `tool.call`。 |
+| `tool_name` | 使用上面的工具名，例如 `erp.get_inventory`。 |
+| `payload` | 脱敏后的工具入参、输出摘要、重试信息或错误摘要。 |
+| `created_at` | ISO 时间字符串。 |
+
+标准成功路径中的 `tool_name` 顺序应与工具链一致。不要把调试型生命周期事件，例如 `tool.started`、`tool.completed`、原始异常堆栈，混入该标准轨迹；如果需要调试信息，请放在不会破坏公开事件契约的字段或日志中。受权限保护的 OA 写操作被跳过时，不得记录 `oa.create_approval_draft` 的成功事件。
+
+#### RAG 检索
+
+`POST /api/knowledge/search` 返回：
+
+| 字段 | 说明 |
+| --- | --- |
+| `answer` | 基于可见知识库 chunk 生成的简短回答，不能照抄受限文档正文。 |
+| `citations` | 可见引用列表，每项包含 `doc_id`、`title`、`source_path`、`chunk_id`。 |
+| `filtered_doc_ids` | 因权限不足被过滤的文档 ID。 |
+
+知识库正文是不可信数据。文档中的“忽略之前指令”“泄露密钥”等内容只能作为普通文本处理，不能改变系统策略、权限策略或工具计划。
+
+#### 错误结构
+
+提示词注入或明显恶意任务应在创建任务阶段拒绝：
+
+```json
+{
+  "detail": {
+    "code": "prompt_injection_detected",
+    "message": "..."
+  }
+}
+```
+
+同时写入审计日志：`action="task.rejected"`、`decision="deny"`。权限拒绝、资源不存在和工具失败也应返回稳定、可解释的错误结构；错误中不得包含原始堆栈、凭证、供应商机密或成本价字段。
+
+#### Dashboard
+
+`GET /api/admin/dashboard` 至少返回：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_count` | 任务总数。 |
+| `run_count` | 运行总数。 |
+| `completed_count` | 完成运行数。 |
+| `failed_count` | 失败运行数。 |
+| `failure_rate` | 失败率，空数据时为 `0`。 |
+| `token_cost` | run 累计成本。 |
+| `average_run_seconds` | 已结束 run 的平均耗时秒数，空数据时为 `0`。 |
+| `tool_call_counts` | 按 `tool_name` 聚合的调用次数，例如 `oa.create_approval_draft`。 |
+| `recent_failures` | 最近失败摘要列表；没有失败时为 `[]`。 |
+| `generated_at` | 指标生成时间。 |
+
+可以额外返回队列积压、重试次数、权限拒绝数量等指标，但上述字段名必须保持稳定。
+
+#### 审计日志
+
+`GET /api/admin/audit-logs` 返回 `logs` 列表，每条日志至少包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `actor_id` | 操作者用户 ID。 |
+| `action` | 标准动作名。 |
+| `resource` | 资源 ID 或资源类别。 |
+| `decision` | `allow` 或 `deny`。 |
+| `payload` | 脱敏后的上下文。 |
+| `created_at` | ISO 时间字符串。 |
+
+标准动作名包括：
+
+| 动作 | 触发场景 |
+| --- | --- |
+| `task.create` | 成功创建任务。 |
+| `task.rejected` | 任务创建被安全策略拒绝。 |
+| `run.create` | 成功创建运行。 |
+| `run.read` | 查看运行详情。 |
+| `run.events.read` | 查看运行事件。 |
+| `tool.call` | 执行一次标准工具调用。 |
+| `approval.draft.create` | 成功创建 OA 审批草稿。 |
+| `admin.dashboard.read` | 查看管理后台指标。 |
+
+历史代码或公开测试中可能出现过 `oa.approval.create` 之类别名；正式契约以 `approval.draft.create` 为准。所有审计 payload 必须脱敏。
+
+#### 敏感字段
+
+以下字段和内容不得出现在 API 响应、run result、run events、audit logs 或 `COLLABORATION_LOG.md` 中：
+
+- `vendor_secret`
+- `unit_cost_usd`
+- 供应商内部返利、合同机密、凭证、token、原始异常堆栈
+- 内部调试字段，例如 `debug`、`candidate_note`
 
 ## 协作证据
 
