@@ -36,10 +36,10 @@ def test_acceptance_alice_inventory_replenishment_loop(client):
     assert result["citations"]
 
 
-def test_acceptance_bob_analysis_completes_but_oa_is_skipped(client):
+def test_acceptance_bob_analysis_only_does_not_create_oa_draft(client):
     task_id = create_task(
         client,
-        prompt="分析 SKU-001 库存异常，并生成补货审批建议。",
+        prompt="只分析 SKU-001 库存异常，返回补货分析结论，不创建 OA 审批草稿。",
         user_id="bob",
     )
 
@@ -49,21 +49,17 @@ def test_acceptance_bob_analysis_completes_but_oa_is_skipped(client):
     result = detail["result"] or {}
     assert result["sku"] == "SKU-001"
     assert "approval_draft_id" not in result
-    assert "oa:approval:write" in result["approval_skipped_reason"]
 
     events = client.get(f"/api/runs/{detail['id']}/events", headers=headers("bob")).json()["events"]
-    assert any(
-        event["type"] == "tool.skipped"
-        and event["tool_name"] == "oa.create_approval_draft"
-        and "oa:approval:write" in _json_text(event["payload"])
+    assert not any(
+        event["tool_name"] == "oa.create_approval_draft" and event["type"] != "tool.skipped"
         for event in events
     )
 
     audit_logs = client.get("/api/admin/audit-logs", headers=headers("alice")).json()["logs"]
-    assert any(
-        log["action"] == "oa.approval.skip"
-        and log["decision"] in {"skip", "deny"}
-        and "oa:approval:write" in _json_text(log["payload"])
+    assert not any(
+        log["action"] in {"oa.approval.create", "approval.draft.create"}
+        and log["decision"] == "allow"
         for log in audit_logs
     )
 
