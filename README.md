@@ -61,11 +61,13 @@ make PY=py dev
 
 ## 候选人任务
 
-请补全代码中的 `TODO(candidate/P0)`、`TODO(candidate/P1)`、`TODO(candidate/P2)` 以及带有 `-collab` 后缀的协作观察项。公开仓库只提供基础自检：
+请补全代码中的 `TODO(candidate/P0)`、`TODO(candidate/P1)`、`TODO(candidate/P2)`，并同步填写 `COLLABORATION_LOG.md` 中的协作证据。公开仓库只提供基础自检：
 
 ```bash
 python scripts/self_check.py
 ```
+
+仓库还包含 `tests/test_acceptance_guidance.py`，用于暴露更接近正式评分的验收方向。该文件默认以 `xfail` 形式存在，起始仓库不会因为它变红；候选人完成实现后可以去掉或收紧这些标记，用它校准业务闭环、权限、RAG、脱敏和可见性。
 
 正式评分不会只测公开样例，也不会只测 `SKU-001`。请避免写死用户、SKU、工具输出或公开 fixture。
 
@@ -86,10 +88,12 @@ python scripts/self_check.py
 推荐的业务验收闭环：
 
 1. `alice` 提交 SKU 库存异常任务，运行完成后结果包含库存缺口、14 天预测需求、供应商风险、规则引用和 OA 草稿编号。
-2. `bob` 没有 `oa:approval:write` 权限；系统应按计划和权限策略明确拒绝、跳过或返回只分析结果，并记录原因。
+2. `bob` 没有 `oa:approval:write` 权限；系统应完成分析但跳过 OA 草稿创建，运行结果必须保留只分析结论并包含 `approval_skipped_reason`，步骤事件和审计日志必须记录该权限跳过。
 3. `mallory` 不能创建任务；权限拒绝应有清晰错误和审计记录。
 4. 针对公开和隐藏 SKU 都应得到合理结果，不能把逻辑写死在单个样例上。
 5. 知识库检索必须返回可追溯引用；受限文档只能报告过滤结果，不能泄露正文。
+6. 知识库正文和工具返回值都必须视为不可信数据；即使文档中出现“忽略之前指令”之类文本，也不能覆盖系统策略、权限策略或执行计划。
+7. 最终 API 响应、运行事件和审计日志不得保留内部调试字段，例如 `debug`、`candidate_note` 或原始工具异常堆栈。
 
 ## API 契约
 
@@ -126,6 +130,8 @@ curl -X POST http://127.0.0.1:8000/api/tasks \
 - 根因分析记录。
 - API、数据库、权限、审计日志的兼容影响。
 - 执行过的验证命令、结果和未覆盖风险。
+- 对 `AGENTS.md` 历史维护者备注逐条采用或拒绝的判断，以及对应证据。
+- 至少记录 `py scripts/self_check.py` 和 `py -m pytest -q` 的执行结果；如果有预期 `xfail`，说明它对应的未完成能力。
 
 ## 评分方式
 

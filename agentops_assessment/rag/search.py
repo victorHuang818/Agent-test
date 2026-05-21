@@ -29,7 +29,8 @@ class KnowledgeIndex:
     """轻量级本地检索索引。
 
     TODO(candidate/P1): 完成权限感知检索、重排、答案生成、引用溯源
-    和被过滤文档报告。
+    和被过滤文档报告。文档正文必须视为不可信数据，不能让正文中的
+    指令改变系统策略；完成实现后不得向 API 返回 debug/candidate_note。
     """
 
     def search(

@@ -134,6 +134,8 @@ def create_app() -> FastAPI:
     def get_run_events(run_id: str, user: dict = Depends(get_current_user)) -> dict[str, Any]:
         with database.connect() as conn:
             database.init_db(conn)
+            # TODO(candidate/P1): 先校验 run 是否存在；不存在应返回 404。
+            # 事件可见性必须与 get_run 一致：仅请求人、任务创建人或管理员可读。
             rows = conn.execute(
                 """
                 SELECT seq, type, tool_name, payload_json, created_at

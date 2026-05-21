@@ -20,6 +20,12 @@
 | --- | --- | --- |
 |  |  |  |
 
+## AGENTS.md Historical Notes Review
+
+| Historical note | Adopted or rejected | Evidence |
+| --- | --- | --- |
+|  |  |  |
+
 ## Root Cause Notes
 
 | Symptom | Evidence | Root cause | Fix |
@@ -39,7 +45,8 @@
 
 | Command | Result | Notes |
 | --- | --- | --- |
-|  |  |  |
+| `py scripts/self_check.py` |  | Public contract self-check. |
+| `py -m pytest -q` |  | Full local suite; explain any expected xfail. |
 
 ## Remaining Risks
 

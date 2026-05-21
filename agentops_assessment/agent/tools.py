@@ -67,7 +67,8 @@ class ToolRegistry:
             self.last_call_attempts[name] = attempts
             try:
                 result = self._tools[name](args)
-                # TODO(candidate/P1): 规范化工具输出，并对敏感字段做脱敏。
+                # TODO(candidate/P1): 规范化工具输出，并对敏感字段做脱敏；
+                # vendor_secret、unit_cost_usd 等不得进入 result/events/audit。
                 return result
             except TransientIntegrationError as exc:
                 last_error = exc
