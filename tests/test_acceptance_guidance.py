@@ -7,10 +7,10 @@ import pytest
 from tests.conftest import create_task, headers, run_task_and_wait
 
 
-pytestmark = pytest.mark.xfail(
-    reason="Acceptance guidance for the candidate implementation; starter repo is intentionally incomplete.",
-    strict=False,
-)
+# pytestmark = pytest.mark.xfail(
+#     reason="Acceptance guidance for the candidate implementation; starter repo is intentionally incomplete.",
+#     strict=False,
+# )
 
 
 def _json_text(value: object) -> str:

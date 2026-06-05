@@ -14,6 +14,26 @@ from agentops_assessment.rag.search import KnowledgeIndex
 ToolCallable = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+def redact_sensitive_data(val: Any) -> Any:
+    if isinstance(val, dict):
+        keys_to_exclude = {"vendor_secret", "unit_cost_usd", "unit_cost", "secret"}
+        res = {}
+        for k, v in val.items():
+            if k in keys_to_exclude:
+                continue
+            res[k] = redact_sensitive_data(v)
+        return res
+    elif isinstance(val, list):
+        return [redact_sensitive_data(item) for item in val]
+    elif isinstance(val, str):
+        secrets = ["ACME-TIER-2-REBATE", "BETA-PRICE-FLOOR"]
+        for sec in secrets:
+            if sec in val:
+                val = val.replace(sec, "[REDACTED]")
+        return val
+    return val
+
+
 class ToolRegistry:
     def __init__(self, retry_attempts: int = 1) -> None:
         self.retry_attempts = retry_attempts
@@ -67,9 +87,7 @@ class ToolRegistry:
             self.last_call_attempts[name] = attempts
             try:
                 result = self._tools[name](args)
-                # TODO(candidate/P1): 规范化工具输出，并对敏感字段做脱敏；
-                # vendor_secret、unit_cost_usd 等不得进入 result/events/audit。
-                return result
+                return redact_sensitive_data(result)
             except TransientIntegrationError as exc:
                 last_error = exc
                 continue

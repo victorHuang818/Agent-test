@@ -48,20 +48,50 @@ class KnowledgeIndex:
                 """
             ).fetchall()
 
-        filtered_doc_ids = sorted(
-            {
-                row["doc_id"]
-                for row in rows
-                if row["permission"] not in user_permissions and row["permission"] != "knowledge:read"
-            }
-        )
-        # 占位实现故意不返回有效答案，直到候选人完成测试要求的检索和重排行为。
+        visible_chunks = []
+        filtered_doc_ids = set()
+        for row in rows:
+            if row["permission"] in user_permissions:
+                visible_chunks.append(row)
+            else:
+                filtered_doc_ids.add(row["doc_id"])
+
+        # Rank visible chunks by cosine similarity
+        query_tokens = tokenize(query)
+        scored_chunks = []
+        for chunk in visible_chunks:
+            doc_tokens = tokenize(chunk["content"])
+            score = cosine_score(query_tokens, doc_tokens)
+            if score > 0.0:
+                scored_chunks.append((score, chunk))
+
+        # Sort descending by score
+        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+
+        top_chunks = [chunk for _, chunk in scored_chunks[:top_k]]
+
+        citations = []
+        for chunk in top_chunks:
+            citations.append({
+                "doc_id": chunk["doc_id"],
+                "title": chunk["title"],
+                "source_path": chunk["source_path"],
+                "chunk_id": chunk["id"],
+            })
+
+        # Synthesize answer using FakeLLM
+        if top_chunks:
+            from agentops_assessment.agent.fake_llm import FakeLLM
+            llm = FakeLLM()
+            chunk_contents = "\n".join(f"- {c['content']}" for c in top_chunks)
+            prompt = f"Using the following knowledge:\n{chunk_contents}\n\nAnswer the query: {query}"
+            llm_res = llm.complete(prompt)
+            answer = llm_res["text"]
+        else:
+            answer = "No relevant knowledge found."
+
         return {
-            "answer": "",
-            "citations": [],
-            "filtered_doc_ids": filtered_doc_ids,
-            "debug": {
-                "candidate_note": "TODO(candidate/P1): 按查询相关性排序 chunk，并生成答案。",
-                "available_chunks": len(rows),
-            },
+            "answer": answer,
+            "citations": citations,
+            "filtered_doc_ids": sorted(list(filtered_doc_ids)),
         }
